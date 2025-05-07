@@ -126,6 +126,18 @@ func newPlugin(args *skel.CmdArgs) (*plugin, error) {
 		}
 	}
 
+	// Parse CNI config JSON from stdin for ownerUID/ownerGID
+	type NetConf struct {
+		types.NetConf
+		OwnerUID *int `json:"ownerUID,omitempty"`
+		OwnerGID *int `json:"ownerGID,omitempty"`
+	}
+
+	netConf := NetConf{}
+	if err := json.Unmarshal(args.StdinData, &netConf); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal plugin config: %w", err)
+	}
+
 	plugin := &plugin{
 		NetlinkOps: internal.DefaultNetlinkOps(),
 		tapUID:     os.Geteuid(),
@@ -141,6 +153,15 @@ func newPlugin(args *skel.CmdArgs) (*plugin, error) {
 		currentResult:  currentResult,
 		confCNIVersion: confCNIVersion,
 	}
+
+	// Use ownerUID/ownerGID from config if present
+	if netConf.OwnerUID != nil {
+		plugin.tapUID = *netConf.OwnerUID
+	}
+	if netConf.OwnerGID != nil {
+		plugin.tapGID = *netConf.OwnerGID
+	}
+	
 	parsedArgs, err := extractArgs(args.Args)
 	if err != nil {
 		return nil, err
