@@ -24,7 +24,7 @@ import (
 // RootFilterHandle returns a u32 filter handle representing the root of the Qdisc. It's defined as
 // a func so it can be immutable even though the value is retrieved through the netlink library
 func RootFilterHandle() uint32 {
-	return netlink.MakeHandle(0xffff, 0)
+	return netlink.HANDLE_MIN_INGRESS
 }
 
 // NetlinkOps is an interface to the underlying low-level netlink operations that need to be performed
@@ -80,26 +80,24 @@ type defaultNetlinkOps struct{}
 
 var _ NetlinkOps = &defaultNetlinkOps{}
 
+// AddIngressQdisc ensures a *clsact* qdisc is present.  If Cilium (or somebody
+// else) already attached it we just reuse it.
 func (ops defaultNetlinkOps) AddIngressQdisc(link netlink.Link) error {
-	err := netlink.QdiscAdd(ops.ingressQdisc(link))
-	if err != nil {
-		return fmt.Errorf("failed to add ingress qdisc to device %q: %w", link.Attrs().Name, err)
+	if _, err := ops.GetIngressQdisc(link); err == nil {
+		return nil // already there
 	}
 
+	if err := netlink.QdiscAdd(ops.ingressQdisc(link)); err != nil &&
+		!errors.Is(err, unix.EEXIST) {
+		return fmt.Errorf("failed to add clsact qdisc to device %q: %w",
+			link.Attrs().Name, err)
+	}
 	return nil
 }
 
-func (ops defaultNetlinkOps) RemoveIngressQdisc(link netlink.Link) error {
-	qdisc, err := ops.GetIngressQdisc(link)
-	if err != nil {
-		return err
-	}
-
-	err = netlink.QdiscDel(qdisc)
-	if err != nil {
-		return fmt.Errorf("failed to remove ingress qdisc from device %q: %w", link.Attrs().Name, err)
-	}
-
+// We no longer delete the qdisc on DEL because clsact is a shared resource
+// (e.g. Cilium’s BPF programs live there).  Simply return nil so DEL is safe.
+func (defaultNetlinkOps) RemoveIngressQdisc(link netlink.Link) error {
 	return nil
 }
 
@@ -109,9 +107,9 @@ func (ops defaultNetlinkOps) GetIngressQdisc(link netlink.Link) (netlink.Qdisc, 
 		return nil, fmt.Errorf("failed to list qdiscs for link %q: %w", link.Attrs().Name, err)
 	}
 
-	expectedQdisc := ops.ingressQdisc(link)
 	for _, qdisc := range qdiscs {
-		if qdisc.Attrs().Parent == expectedQdisc.Attrs().Parent {
+		// clsact qdisc is identified by parent == HANDLE_CLSACT (0xfffffff2)
+		if qdisc.Attrs().Parent == netlink.HANDLE_CLSACT {
 			return qdisc, nil
 		}
 	}
@@ -119,12 +117,15 @@ func (ops defaultNetlinkOps) GetIngressQdisc(link netlink.Link) (netlink.Qdisc, 
 	return nil, &QdiscNotFoundError{device: link.Attrs().Name}
 }
 
+// ingressQdisc now returns a *clsact* qdisc so we share it with Cilium.
 func (defaultNetlinkOps) ingressQdisc(link netlink.Link) netlink.Qdisc {
-	return &netlink.Ingress{
+	return &netlink.GenericQdisc{
 		QdiscAttrs: netlink.QdiscAttrs{
 			LinkIndex: link.Attrs().Index,
-			Parent:    netlink.HANDLE_INGRESS,
+			Parent:    netlink.HANDLE_CLSACT, // clsact root
+			Handle:    0,   // let the kernel assign
 		},
+		QdiscType: "clsact",
 	}
 }
 
