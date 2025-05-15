@@ -75,7 +75,7 @@ func (m *MockNetlinkOps) RemoveIngressQdisc(sourceLink netlink.Link) error {
 }
 
 // AddRedirectFilter does nothing and returns an error if configured to do so (otherwise nil)
-func (m *MockNetlinkOps) AddRedirectFilter(sourceLink netlink.Link, targetLink netlink.Link) error {
+func (m *MockNetlinkOps) AddRedirectFilter(sourceLink netlink.Link, targetLink netlink.Link, _ ...uint16,) error {
 	return m.AddRedirectFilterErr
 }
 

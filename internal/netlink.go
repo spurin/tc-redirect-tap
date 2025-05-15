@@ -21,6 +21,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// KernelDefaultFilterPriority is what the kernel uses when userspace leaves
+// the priority field empty (TC_PRIO_DEFAULT in net/sched/sch_api.c).
+const KernelDefaultFilterPriority uint16 = 49152
+
 // RootFilterHandle returns a u32 filter handle representing the root of the Qdisc. It's defined as
 // a func so it can be immutable even though the value is retrieved through the netlink library
 func RootFilterHandle() uint32 {
@@ -53,10 +57,11 @@ type NetlinkOps interface {
 	// provided device.
 	RemoveIngressQdisc(link netlink.Link) error
 
-	// AddRedirectFilter adds a u32 redirect filter to the provided sourceLink that redirects
-	// packets from its ingress queue to the egress queue of the provided targetLink. It requires
-	// that sourceLink have an ingress qdisc attached prior to the call.
-	AddRedirectFilter(sourceLink netlink.Link, targetLink netlink.Link) error
+        // AddRedirectFilter adds a u32 redirect filter to sourceLink’s ingress that redirects
+        // packets to targetLink’s egress.  If no priority is supplied the kernel default
+        // (49152) is used, so existing call-sites need **no changes**.
+        AddRedirectFilter(sourceLink netlink.Link, targetLink netlink.Link, prio ...uint16) error
+
 	// GetRedirectFilter looks for a u32 redirect filter matching the one added by
 	// AddRedirectFilter, returning it if found. If not found, it returns a FilterNotFoundError
 	GetRedirectFilter(sourceLink netlink.Link, targetLink netlink.Link) (netlink.Filter, error)
@@ -129,12 +134,18 @@ func (defaultNetlinkOps) ingressQdisc(link netlink.Link) netlink.Qdisc {
 	}
 }
 
-func (ops defaultNetlinkOps) AddRedirectFilter(sourceLink netlink.Link, targetLink netlink.Link) error {
+func (ops defaultNetlinkOps) AddRedirectFilter(sourceLink netlink.Link, targetLink netlink.Link, prio ...uint16,) error {
+	// fall back to the kernel default if caller didn’t specify one
+	effectivePrio := KernelDefaultFilterPriority
+	if len(prio) > 0 {
+		effectivePrio = prio[0]
+	}
 	err := netlink.FilterAdd(&netlink.U32{
 		FilterAttrs: netlink.FilterAttrs{
 			LinkIndex: sourceLink.Attrs().Index,
 			Parent:    RootFilterHandle(),
 			Protocol:  unix.ETH_P_ALL,
+			Priority:  effectivePrio,
 		},
 		Actions: []netlink.Action{
 			&netlink.MirredAction{
