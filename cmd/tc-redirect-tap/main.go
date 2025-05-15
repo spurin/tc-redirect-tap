@@ -129,8 +129,9 @@ func newPlugin(args *skel.CmdArgs) (*plugin, error) {
 	// Parse CNI config JSON from stdin for ownerUID/ownerGID
 	type NetConf struct {
 		types.NetConf
-		OwnerUID *int `json:"ownerUID,omitempty"`
-		OwnerGID *int `json:"ownerGID,omitempty"`
+		OwnerUID *int    `json:"ownerUID,omitempty"`
+		OwnerGID *int    `json:"ownerGID,omitempty"`
+		Priority *uint16 `json:"priority,omitempty"`
 	}
 
 	netConf := NetConf{}
@@ -152,6 +153,7 @@ func newPlugin(args *skel.CmdArgs) (*plugin, error) {
 
 		currentResult:  currentResult,
 		confCNIVersion: confCNIVersion,
+		priority:       netConf.Priority,
 	}
 
 	// Use ownerUID/ownerGID from config if present
@@ -161,7 +163,7 @@ func newPlugin(args *skel.CmdArgs) (*plugin, error) {
 	if netConf.OwnerGID != nil {
 		plugin.tapGID = *netConf.OwnerGID
 	}
-	
+
 	parsedArgs, err := extractArgs(args.Args)
 	if err != nil {
 		return nil, err
@@ -253,6 +255,10 @@ type plugin struct {
 
 	// confCniVersion is the CNI version specified by the conflist passed to tc-redirect-tap
 	confCNIVersion string
+
+	// priority is the (optional) tc filter priority supplied in the conflist.
+	// nil means “use kernel default (49152)”.
+	priority *uint16
 }
 
 func (p plugin) add() error {
@@ -281,11 +287,21 @@ func (p plugin) add() error {
 		}
 
 		err = p.AddRedirectFilter(tapLink, redirectLink)
+		if p.priority != nil {
+			err = p.AddRedirectFilter(tapLink, redirectLink, *p.priority)
+		} else {
+			err = p.AddRedirectFilter(tapLink, redirectLink) // kernel default (49152)
+		}
 		if err != nil {
 			return err
 		}
 
 		err = p.AddRedirectFilter(redirectLink, tapLink)
+		if p.priority != nil {
+			err = p.AddRedirectFilter(redirectLink, tapLink, *p.priority)
+		} else {
+			err = p.AddRedirectFilter(redirectLink, tapLink)
+		}
 		if err != nil {
 			return err
 		}
